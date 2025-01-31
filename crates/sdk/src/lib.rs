@@ -48,7 +48,6 @@ pub use crate::network::prover::NetworkProver;
 
 // Re-export the proof and prover traits.
 pub use proof::*;
-#[cfg(feature = "network")]
 pub use prover::Prover;
 pub use prover::SP1VerificationError;
 
@@ -66,6 +65,50 @@ pub use sp1_prover::{
 
 // Re-export the utilities.
 pub use utils::setup_logger;
+
+/// Builder for creating a `ProverClient` with specific configurations.
+pub struct ProverClientBuilder {
+    #[cfg(feature = "docker")]
+    docker: bool,
+    #[cfg(feature = "in_memory")]
+    in_memory: bool,
+}
+
+impl ProverClientBuilder {
+    /// Enable Docker-based proving.
+    #[cfg(feature = "docker")]
+    pub fn docker(mut self) -> Self {
+        self.docker = true;
+        self
+    }
+
+    /// Enable in-memory proving.
+    #[cfg(feature = "in_memory")]
+    pub fn in_memory(mut self) -> Self {
+        self.in_memory = true;
+        self
+    }
+
+    /// Build the `ProverClient` with the selected configuration.
+    pub fn build(self) -> Box<dyn Prover<CpuProverComponents>> {
+        #[cfg(feature = "in_memory")]
+        if self.in_memory {
+            return Box::new(prover::InMemoryProver {
+                inner: SP1Prover::new(),
+            });
+        }
+
+        #[cfg(feature = "docker")]
+        if self.docker {
+            return Box::new(network::prover::NetworkProver::new(
+                "dummy_key",
+                "http://localhost:3000",
+            ));
+        }
+
+        panic!("No prover implementation selected");
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -176,6 +219,21 @@ mod tests {
         let mut stdin = SP1Stdin::new();
         stdin.write(&10usize);
         let proof = client.prove(&pk, &stdin).plonk().run().unwrap();
+        client.verify(&proof, &vk).unwrap();
+    }
+
+    #[cfg(feature = "in_memory")]
+    #[test]
+    fn test_in_memory_prover() {
+        utils::setup_logger();
+        let client = ProverClient::builder().in_memory().build();
+        let elf = test_artifacts::FIBONACCI_ELF;
+        let (pk, vk) = client.setup(elf);
+        let mut stdin = SP1Stdin::new();
+        stdin.write(&10usize);
+
+        // Generate proof & verify.
+        let proof = client.prove(&pk, &stdin, SP1ProofMode::Compressed).unwrap();
         client.verify(&proof, &vk).unwrap();
     }
 }
